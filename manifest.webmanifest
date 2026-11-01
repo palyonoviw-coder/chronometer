@@ -1,0 +1,17 @@
+{
+  "name": "Хронометр — учёт рабочего времени",
+  "short_name": "Хронометр",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f4f2",
+  "theme_color": "#1c1c1a",
+  "lang": "ru",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Запустить таймер", "short_name": "Старт", "url": "./?do=start" },
+    { "name": "Остановить таймер", "short_name": "Стоп", "url": "./?do=stop" }
+  ]
+}

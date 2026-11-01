@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Хронометр — учёт рабочего времени</title>
+  <meta name="description" content="Учёт рабочего времени: таймер, проекты и клиенты, отчёты в PDF за период, синхронизация через Google Диск.">
+  <meta name="theme-color" content="#f4f4f2" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121212" media="(prefers-color-scheme: dark)">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="vendor/swiper-bundle.min.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <nav class="nav" aria-label="Разделы">
+      <div class="brand"><img src="icon.svg" alt="" width="30" height="30"><span>Хронометр</span></div>
+      <button class="btn primary nav-add" id="nav-add"><span data-icon="plus"></span>Добавить вручную</button>
+      <button class="nav-item" data-view="timer"><span class="ni" data-icon="timer"></span><span>Таймер</span></button>
+      <button class="nav-item" data-view="calendar"><span class="ni" data-icon="calendar"></span><span>Календарь</span></button>
+      <button class="nav-item" data-view="reports"><span class="ni" data-icon="chart-pie"></span><span>Отчёты</span></button>
+      <button class="nav-item" data-view="projects"><span class="ni" data-icon="folder"></span><span>Проекты</span></button>
+      <button class="nav-item" data-view="more"><span class="ni" data-icon="ellipsis"></span><span>Ещё</span></button>
+    </nav>
+    <main id="main" class="main" tabindex="-1"></main>
+    <button class="fab" id="fab" aria-label="Добавить запись вручную"></button>
+  </div>
+  <dialog id="modal" class="modal"></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="config.js"></script>
+  <script src="icons.js"></script>
+  <script src="sync.js"></script>
+  <script src="vendor/swiper-bundle.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
