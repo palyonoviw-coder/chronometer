@@ -1,6 +1,6 @@
 // Offline cache for the app shell: network first (so updates arrive immediately), cache when offline.
 // pdfmake не входит в оболочку (≈2 МБ): он попадает в кэш при первом экспорте PDF.
-const CACHE = 'chronometer-v2';
+const CACHE = 'chronometer-v3';
 const SHELL = ['./', 'index.html', 'styles.css', 'config.js', 'icons.js', 'sync.js', 'app.js', 'icon.svg', 'manifest.webmanifest', 'vendor/swiper-bundle.min.js', 'vendor/swiper-bundle.min.css'];
 
 self.addEventListener('install', (e) => {

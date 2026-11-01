@@ -224,6 +224,33 @@ const sumDur = (list) => list.reduce((s, e) => s + durOf(e), 0);
 const sumAmount = (list) => list.reduce((s, e) => s + amountOf(e), 0);
 const entriesIn = (from, to) => db.entries.filter((e) => { const d = dayOf(e.start); return d >= from && d <= to; });
 
+function fieldsOf(e) {
+  return { note: e.note, projectId: e.projectId, labels: [...e.labels], billable: e.billable };
+}
+
+function lastFinished() {
+  return db.entries.reduce((best, e) => (e.end !== null && (!best || e.end > best.end) ? e : best), null);
+}
+
+/** Последняя запись с каждым описанием, самые свежие первыми — для подсказок и «Недавних». */
+function recentNotes(limit = 40) {
+  const seen = new Set(), out = [];
+  for (const e of [...db.entries].sort((a, b) => b.start - a.start)) {
+    const k = e.note.trim().toLowerCase();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(e);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+const findByNote = (note) => recentNotes(500).find((e) => e.note.trim().toLowerCase() === note.trim().toLowerCase());
+
+function notesDatalist() {
+  return `<datalist id="notes">${recentNotes().map((e) => `<option value="${esc(e.note)}">${esc(projById(e.projectId)?.name || '')}</option>`).join('')}</datalist>`;
+}
+
 function projectTitle(p) {
   if (!p) return 'Без проекта';
   const c = clientById(p.clientId);
@@ -235,7 +262,6 @@ function startTimer(fields) {
   const r = running();
   if (r) r.end = now;
   db.entries.push({ id: uid(), note: fields.note || '', projectId: fields.projectId || '', labels: [...(fields.labels || [])], billable: Boolean(fields.billable), start: now, end: null });
-  ui.draft = { note: '', projectId: '', labels: [], billable: false };
   save(); render();
 }
 
@@ -243,6 +269,7 @@ function stopTimer() {
   const r = running();
   if (!r) return;
   r.end = Date.now();
+  ui.draft = fieldsOf(r); // следующий запуск по умолчанию продолжает ту же работу
   // Случайное двойное нажатие «старт — стоп» не должно оставлять в журнале пустых записей.
   if (durOf(r) < 5000) {
     db.entries = db.entries.filter((e) => e !== r);
@@ -450,11 +477,13 @@ function viewTimer() {
   const from = addDays(t, -(ui.days - 1));
   const shown = done.filter((e) => dayOf(e.start) >= from);
   const more = done.length > shown.length;
+  const recent = r ? [] : recentNotes(6).filter((e) => e.note !== target.note).slice(0, 5);
   return `${topbar('Таймер', `Сегодня ${hrs(sumDur(entriesIn(t, t)))} · за неделю ${hrs(sumDur(entriesIn(ws, addDays(ws, 6))))}`, `<span data-sync-slot="btn">${Sync.button()}</span>`)}
   <div class="content stack">
     <div class="card timer-card ${r ? 'running' : ''}">
       <div class="timer-row">
-        <input type="text" id="t-note" class="desc" placeholder="Над чем работаете?" value="${esc(target.note)}" autocomplete="off" enterkeyhint="go">
+        <input type="text" id="t-note" class="desc" placeholder="Над чем работаете?" value="${esc(target.note)}" autocomplete="off" enterkeyhint="go" list="notes">${notesDatalist()}
+        ${!r && (target.note || target.projectId) ? `<button class="icon-btn" data-act="clear-draft" title="Новая задача" aria-label="Очистить">${icon('x')}</button>` : ''}
         <div class="right">
           <span class="clock" data-live>${r ? clock(durOf(r)) : '0:00:00'}</span>
           ${r ? `<button class="runbtn stop" data-act="stop" aria-label="Остановить">${icon('square')}</button>`
@@ -462,6 +491,7 @@ function viewTimer() {
         </div>
       </div>
       <div class="toolbar">${projectChip(target)}${r ? `<span class="small muted">с ${hm(r.start)}</span>` : ''}</div>
+      ${recent.length ? `<div class="recent"><span class="small muted">Недавние</span><div class="chips">${recent.map((e) => `<button class="chip" data-act="use-recent" data-id="${e.id}"><span class="pdot" style="--c:${colorOf(e)}"></span> ${esc(e.note)}</button>`).join('')}</div></div>` : ''}
     </div>
     <div class="card">
       ${shown.length ? groupedEntries(shown) : emptyState('timer', 'Записей пока нет. Запустите таймер или добавьте время вручную.', `<button class="btn" data-act="new-entry">${icon('plus')} Добавить вручную</button>`)}
@@ -808,12 +838,15 @@ function bindColor(form, field = 'color') {
 /** Ручная запись или правка существующей. `preset` — { day, time } для новой записи из календаря. */
 function entryModal(entry = null, preset = {}) {
   const live = entry && entry.end === null;
+  const last = lastFinished();
   const day = entry ? dayOf(entry.start) : preset.day || today();
-  const startT = entry ? hm(entry.start) : preset.time || hm(Date.now() - HOUR);
+  // Новая запись без пресета продолжает день: с конца последней записи до текущего момента.
+  const fromLast = !entry && !preset.time && last && dayOf(last.end) === today() && Date.now() - last.end > 6e4 && Date.now() - last.end < 12 * HOUR;
+  const startT = entry ? hm(entry.start) : preset.time || (fromLast ? hm(last.end) : hm(Date.now() - HOUR));
   const endT = entry && !live ? hm(entry.end) : preset.time ? hm(atTime(day, preset.time) + HOUR) : hm(Date.now());
-  const e = entry || { note: '', projectId: '', labels: [], billable: false };
+  const e = entry || (last ? fieldsOf(last) : { note: '', projectId: '', labels: [], billable: false });
   openModal(entry ? 'Запись' : 'Новая запись', `
-    <label class="f">Описание<input type="text" name="note" value="${esc(e.note)}" placeholder="Над чем работали?" autocomplete="off"></label>
+    <label class="f">Описание<input type="text" name="note" value="${esc(e.note)}" placeholder="Над чем работали?" autocomplete="off" list="notes">${notesDatalist()}</label>
     <label class="f">Проект<select name="projectId">${projectOptions(e.projectId)}</select></label>
     <div class="f"><span class="lbl">Теги</span>${labelPicker(e.labels)}</div>
     <div class="two">
@@ -844,7 +877,16 @@ function entryModal(entry = null, preset = {}) {
         el.dur.value = hrs(d);
       });
       el.projectId.addEventListener('change', () => { if (!entry) el.billable.checked = Boolean(projById(el.projectId.value)?.billable); });
-      if (!entry) el.note.focus();
+      // Выбрали прежнее описание — подтягиваем его проект, теги и оплату.
+      el.note.addEventListener('input', () => {
+        const prev = findByNote(el.note.value);
+        if (!prev || prev === entry) return;
+        el.projectId.value = prev.projectId;
+        el.labels.value = prev.labels.join(',');
+        form.querySelectorAll('[data-lbl]').forEach((b) => b.classList.toggle('on', prev.labels.includes(b.dataset.lbl)));
+        el.billable.checked = prev.billable;
+      });
+      if (!entry) { el.note.focus(); el.note.select(); }
     },
     onSubmit(fd, form) {
       const d = fd.get('day');
@@ -979,43 +1021,171 @@ function loadPdf() {
   return pdfLib;
 }
 
+/* ---------- PDF-отчёт ---------- */
+
+const PDF = { ink: '#1c1c1a', muted: '#6e6e69', line: '#e4e4df', bar: '#2f3b52', accent: '#fbbf24' };
+const PDF_SLICES = ['#7950f2', '#f03e3e', '#e64980', '#4c6ef5', '#15aabf', '#40c057', '#fab005', '#fd7e14', '#a9672f', '#868e96'];
+const ddmmyyyy = (s) => parseISO(s).toLocaleDateString('ru-RU');
+
+/** Столбцы часов по дням (или неделям / месяцам для длинных периодов) — SVG для pdfmake. */
+function pdfBarChart(range, list) {
+  const days = Math.round((dayStart(range.to) - dayStart(range.from)) / 864e5) + 1;
+  const keyOf = days <= 62 ? (d) => d : days <= 190 ? weekStart : monthOf;
+  const label = days <= 62 ? (k) => parseISO(k).toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short' }).replace('.', '')
+    : days <= 190 ? (k) => `с ${parseISO(k).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}` : (k) => monthLabel(k);
+  const keys = [];
+  for (let d = range.from; d <= range.to; d = addDays(d, 1)) { const k = keyOf(d); if (keys[keys.length - 1] !== k) keys.push(k); }
+  const sums = new Map(keys.map((k) => [k, 0]));
+  for (const e of list) { const k = keyOf(dayOf(e.start)); if (sums.has(k)) sums.set(k, sums.get(k) + durOf(e)); }
+  const W = 515, H = 250, L = 40, B = 62, T = 8;
+  const max = niceMax(Math.max(...sums.values(), 0) / HOUR);
+  const gw = (W - L) / keys.length, bw = Math.max(2, gw * 0.78);
+  const y = (v) => T + (H - T - B) * (1 - v / max);
+  const fs = keys.length > 40 ? 6 : 7.5;
+  let s = '';
+  for (let i = 0; i <= 5; i++) {
+    const v = (max / 5) * i;
+    s += `<line x1="${L}" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="${PDF.line}" stroke-width="0.6"/>`;
+    s += `<text x="${L - 6}" y="${y(v) + 3}" text-anchor="end" font-size="7.5" fill="${PDF.muted}">${round2(v)} ч</text>`;
+  }
+  keys.forEach((k, i) => {
+    const x = L + gw * i + (gw - bw) / 2, v = sums.get(k) / HOUR;
+    if (v > 0) s += `<rect x="${x}" y="${y(v)}" width="${bw}" height="${y(0) - y(v)}" fill="${PDF.bar}"/>`;
+    const cx = L + gw * i + gw / 2;
+    s += `<text x="${cx}" y="${H - B + 12}" text-anchor="end" font-size="${fs}" fill="${PDF.muted}" transform="rotate(-45 ${cx} ${H - B + 12})">${esc(label(k))}</text>`;
+  });
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${s}</svg>`;
+}
+
+/** Кольцевая диаграмма с итогом в центре. items: [{ value, color }]. */
+function pdfDonut(items, center) {
+  const S = 150, c = S / 2, R = 70, r = 44;
+  const total = items.reduce((a, i) => a + i.value, 0) || 1;
+  const pt = (rad, a) => `${(c + rad * Math.sin(a)).toFixed(2)} ${(c - rad * Math.cos(a)).toFixed(2)}`;
+  let a0 = 0, s = '';
+  for (const it of items) {
+    // Полный круг SVG-дугой не нарисовать — делим сектор на половины.
+    const sweep = (it.value / total) * 2 * Math.PI, parts = sweep > Math.PI ? 2 : 1;
+    for (let p = 0; p < parts; p++) {
+      const a = a0 + (sweep / parts) * p, b = a + sweep / parts, large = b - a > Math.PI ? 1 : 0;
+      s += `<path d="M ${pt(R, a)} A ${R} ${R} 0 ${large} 1 ${pt(R, b)} L ${pt(r, b)} A ${r} ${r} 0 ${large} 0 ${pt(r, a)} Z" fill="${it.color}"/>`;
+    }
+    a0 += sweep;
+  }
+  s += `<text x="${c}" y="${c + 5}" text-anchor="middle" font-size="13" fill="${PDF.ink}">${esc(center)}</text>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}">${s}</svg>`;
+}
+
+/** Раздел «кольцо + таблица»: rows — [{ label, value, amount, color }]. */
+function pdfBreakdown(title, rows, total, withAmount) {
+  const pct = (v) => `${((v / (total || 1)) * 100).toFixed(2).replace('.', ',')}%`;
+  const dot = (color) => ({ svg: `<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><circle cx="4" cy="4" r="3.5" fill="${color}"/></svg>`, width: 8, margin: [0, 2, 0, 0] });
+  // Одним неразрывным блоком, чтобы заголовок не оставался внизу страницы без диаграммы.
+  return [{ unbreakable: true, stack: [
+    { text: title, style: 'h2' },
+    { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 515, y2: 0, lineWidth: 0.6, lineColor: PDF.line }], margin: [0, 0, 0, 10] },
+    {
+      columns: [
+        { svg: pdfDonut(rows, clock(total)), width: 150 },
+        {
+          width: '*', margin: [16, 4, 0, 0],
+          table: {
+            widths: [10, '*', 54, ...(withAmount ? [62] : []), 42],
+            body: rows.map((x) => [dot(x.color), x.label, { text: clock(x.value), alignment: 'right' },
+              ...(withAmount ? [{ text: x.amount ? fmt(x.amount) : '—', alignment: 'right' }] : []), { text: pct(x.value), alignment: 'right', color: PDF.muted }]),
+          },
+          layout: { hLineWidth: (i) => (i === 0 ? 0 : 0.6), vLineWidth: () => 0, hLineColor: () => PDF.line, paddingTop: () => 5, paddingBottom: () => 5 },
+        },
+      ],
+      margin: [0, 0, 0, 22],
+    },
+  ] }];
+}
+
 async function exportPdf(kind) {
   toast('Готовлю PDF…');
   try { await loadPdf(); } catch (e) { toast(e.message); return; }
   const { range, list, total, billable, amount } = reportData();
-  const th = (t) => ({ text: t, style: 'th' });
+  const withAmount = amount > 0;
+  const paint = (rows) => rows.map((x, i) => ({ ...x, color: x.color && x.color !== NO_COLOR ? x.color : PDF_SLICES[i % PDF_SLICES.length] }));
+
+  const projects = paint(byProject(list));
+  const weeks = new Map();
+  for (const e of list) {
+    const w = weekStart(dayOf(e.start));
+    const a = w < range.from ? range.from : w, b = addDays(w, 6) > range.to ? range.to : addDays(w, 6);
+    const it = weeks.get(w) || { label: `${ddmmyyyy(a)} – ${ddmmyyyy(b)}`, value: 0, amount: 0, start: w };
+    it.value += durOf(e); it.amount += amountOf(e);
+    weeks.set(w, it);
+  }
+  const weekRows = [...weeks.values()].sort((a, b) => a.start.localeCompare(b.start)).map((x, i) => ({ ...x, color: PDF_SLICES[i % PDF_SLICES.length] }));
+  const notes = new Map();
+  for (const e of list) {
+    const k = `${e.note.trim() || 'Без описания'}\u0000${e.projectId}`;
+    const it = notes.get(k) || { note: e.note.trim() || 'Без описания', project: projectTitle(projById(e.projectId)), value: 0, amount: 0 };
+    it.value += durOf(e); it.amount += amountOf(e);
+    notes.set(k, it);
+  }
+  const noteRows = [...notes.values()].sort((a, b) => b.value - a.value);
+
+  const th = (t, right) => ({ text: t, style: 'th', alignment: right ? 'right' : 'left' });
   const num = (t, bold = false) => ({ text: t, alignment: 'right', bold });
-  const table = (widths, head, rows, foot) => ({
-    table: { headerRows: 1, widths, body: [head.map(th), ...rows, ...(foot ? [foot] : [])] },
-    layout: 'lightHorizontalLines', margin: [0, 0, 0, 18],
-  });
-  const projects = byProject(list);
+  const tableLayout = { hLineWidth: (i, node) => (i === 1 || i === node.table.body.length ? 0.8 : 0.4), vLineWidth: () => 0, hLineColor: () => PDF.line, paddingTop: () => 5, paddingBottom: () => 5 };
+  const logo = (await (await fetch('icon.svg')).text()).trim();
+
   const content = [
-    { text: 'Отчёт о работе', style: 'h1' },
-    { text: [db.settings.name, range.label, reportFilterText()].filter(Boolean).join(' · '), style: 'muted', margin: [0, 4, 0, 14] },
-    { columns: [['Всего часов', hrs(total)], ['Оплачиваемые', hrs(billable)], ['Сумма', fmt(amount)]].map(([k, v]) => ({ stack: [{ text: k, style: 'muted' }, { text: v, fontSize: 16, bold: true }] })), margin: [0, 0, 0, 18] },
-    { text: 'По проектам', style: 'h2' },
-    table(['*', 60, 80], ['Проект', 'Часы', 'Сумма'],
-      projects.map((p) => [p.label, num(hrs(p.value)), num(p.amount ? fmt(p.amount) : '—')]),
-      [{ text: 'Итого', bold: true }, num(hrs(total), true), num(fmt(amount), true)]),
+    {
+      columns: [
+        [
+          { text: kind === 'detailed' ? 'Подробный отчёт' : 'Сводный отчёт', fontSize: 22 },
+          { text: `${ddmmyyyy(range.from)} – ${ddmmyyyy(range.to)}`, color: PDF.muted, margin: [0, 6, 0, 0] },
+          { text: [{ text: 'Итого: ', color: PDF.muted }, { text: clock(total), fontSize: 16 }], margin: [0, 6, 0, 0] },
+          ...(billable && billable !== total ? [{ text: [{ text: 'Оплачиваемое: ', color: PDF.muted }, `${clock(billable)}${withAmount ? ` · ${fmt(amount)}` : ''}`], margin: [0, 3, 0, 0] }]
+            : withAmount ? [{ text: [{ text: 'Сумма: ', color: PDF.muted }, fmt(amount)], margin: [0, 3, 0, 0] }] : []),
+        ],
+        {
+          width: 'auto',
+          columns: [{ svg: logo, width: 36 }, { text: 'Хронометр', fontSize: 18, bold: true, margin: [8, 8, 0, 0], width: 'auto' }],
+        },
+      ],
+    },
+    { text: [db.settings.name, reportFilterText()].filter(Boolean).join(' · '), color: PDF.muted, margin: [0, 4, 0, 0] },
+    list.length ? { svg: pdfBarChart(range, list), width: 515, margin: [0, 18, 0, 22] } : { text: 'За этот период записей нет.', margin: [0, 24, 0, 0] },
   ];
-  if (kind === 'detailed') {
-    content.push({ text: 'Записи', style: 'h2' }, table([52, '*', 90, 58, 40, 60], ['Дата', 'Описание', 'Проект', 'Время', 'Часы', 'Сумма'],
-      [...list].reverse().map((e) => [parseISO(dayOf(e.start)).toLocaleDateString('ru-RU'), e.note || '—', projById(e.projectId)?.name || '—',
-        `${hm(e.start)}–${e.end ? hm(e.end) : '…'}`, num(hrs(durOf(e))), num(e.billable ? fmt(amountOf(e)) : '—')]),
-      [{ text: 'Итого', bold: true, colSpan: 4 }, '', '', '', num(hrs(total), true), num(fmt(amount), true)]));
-  } else {
-    const days = new Map();
-    for (const e of [...list].reverse()) { const d = dayOf(e.start); days.set(d, [...(days.get(d) || []), e]); }
-    content.push({ text: 'По дням', style: 'h2' }, table(['*', 60, 80], ['Дата', 'Часы', 'Сумма'],
-      [...days].map(([d, es]) => [dayLabel(d), num(hrs(sumDur(es))), num(sumAmount(es) ? fmt(sumAmount(es)) : '—')])));
+  if (list.length) {
+    content.push(...pdfBreakdown('Проекты', projects, total, withAmount));
+    if (weekRows.length > 1) content.push(...pdfBreakdown('Недели', weekRows, total, withAmount));
+    content.push(
+      { text: 'Описание', style: 'h2' },
+      {
+        table: {
+          headerRows: 1, widths: ['*', 130, 58, ...(withAmount ? [64] : [])],
+          body: [[th('Описание'), th('Проект'), th('Время', true), ...(withAmount ? [th('Сумма', true)] : [])],
+            ...noteRows.map((x) => [x.note, { text: x.project, color: PDF.muted }, num(clock(x.value)), ...(withAmount ? [num(x.amount ? fmt(x.amount) : '—')] : [])]),
+            [{ text: 'Итого', bold: true }, '', num(clock(total), true), ...(withAmount ? [num(fmt(amount), true)] : [])]],
+        },
+        layout: tableLayout, margin: [0, 0, 0, 22],
+      },
+    );
+    if (kind === 'detailed') {
+      content.push({ text: 'Записи', style: 'h2', pageBreak: 'before' }, {
+        table: {
+          headerRows: 1, widths: [50, '*', 92, 56, 48, ...(withAmount ? [58] : [])],
+          body: [[th('Дата'), th('Описание'), th('Проект'), th('Время'), th('Длит.', true), ...(withAmount ? [th('Сумма', true)] : [])],
+            ...[...list].reverse().map((e) => [ddmmyyyy(dayOf(e.start)), e.note || '—', { text: projById(e.projectId)?.name || '—', color: PDF.muted },
+              `${hm(e.start)}–${e.end ? hm(e.end) : '…'}`, num(clock(durOf(e))), ...(withAmount ? [num(e.billable ? fmt(amountOf(e)) : '—')] : [])]),
+            [{ text: 'Итого', bold: true, colSpan: 4 }, '', '', '', num(clock(total), true), ...(withAmount ? [num(fmt(amount), true)] : [])]],
+        },
+        layout: tableLayout,
+      });
+    }
   }
   const doc = {
-    pageSize: 'A4', pageMargins: [40, 44, 40, 50], content,
-    defaultStyle: { font: 'Roboto', fontSize: 10, color: '#1c1c1a' },
-    styles: { h1: { fontSize: 20, bold: true }, h2: { fontSize: 12, bold: true, margin: [0, 0, 0, 6] }, th: { bold: true, fontSize: 9, color: '#6e6e69' }, muted: { color: '#6e6e69' } },
-    footer: (cur, all) => ({ text: `Хронометр · сформирован ${new Date().toLocaleDateString('ru-RU')} · стр. ${cur} из ${all}`, alignment: 'center', fontSize: 8, color: '#8f8f8a', margin: [0, 18, 0, 0] }),
-    info: { title: `Отчёт о работе ${range.label}` },
+    pageSize: 'A4', pageMargins: [40, 40, 40, 48], content,
+    defaultStyle: { font: 'Roboto', fontSize: 9.5, color: PDF.ink },
+    styles: { h2: { fontSize: 13, margin: [0, 0, 0, 6] }, th: { bold: true, fontSize: 8.5, color: PDF.muted } },
+    footer: (cur, all) => ({ text: `Хронометр · сформирован ${new Date().toLocaleDateString('ru-RU')} · стр. ${cur} из ${all}`, alignment: 'center', fontSize: 7.5, color: '#8f8f8a', margin: [0, 18, 0, 0] }),
+    info: { title: `${kind === 'detailed' ? 'Подробный' : 'Сводный'} отчёт ${range.label}` },
   };
   const blob = await new Promise((resolve) => pdfMake.createPdf(doc).getBlob(resolve));
   const name = `otchet-${range.from}_${range.to}${kind === 'detailed' ? '-podrobno' : ''}.pdf`;
@@ -1081,6 +1251,8 @@ document.addEventListener('click', (e) => {
     case 'edit-entry': { const ent = entryById(id); if (ent) entryModal(ent); break; }
     case 'new-entry': entryModal(); break;
     case 'pick-details': detailsModal(); break;
+    case 'use-recent': { const ent = entryById(id); if (ent) { ui.draft = fieldsOf(ent); render(); } break; }
+    case 'clear-draft': ui.draft = { note: '', projectId: '', labels: [], billable: false }; render(); $('#t-note')?.focus(); break;
     case 'bill-toggle': { const t = running() || ui.draft; t.billable = !t.billable; if (running()) save(); render(); break; }
     case 'more-days': ui.days += 30; render(); break;
     case 'week': ui.week = addDays(ui.week, 7 * Number(el.dataset.d)); render(); break;
@@ -1129,11 +1301,13 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('input', (e) => {
   if (e.target.id !== 't-note') return;
-  const r = running();
-  if (!r) { ui.draft.note = e.target.value; return; }
-  r.note = e.target.value;
-  clearTimeout(ui.nt);
-  ui.nt = setTimeout(save, 800);
+  const r = running(), target = r || ui.draft;
+  target.note = e.target.value;
+  // Выбрали прежнее описание из подсказок — подставляем его проект, теги и оплату (если проект ещё не выбран).
+  const prev = !target.projectId && findByNote(e.target.value);
+  if (prev && prev !== r) Object.assign(target, { projectId: prev.projectId, labels: [...prev.labels], billable: prev.billable });
+  if (r) { clearTimeout(ui.nt); ui.nt = setTimeout(save, 800); }
+  if (prev) { if (r) save(); render(); }
 });
 
 document.addEventListener('change', (e) => {
@@ -1182,6 +1356,7 @@ $('#fab').innerHTML = icon('plus');
 
 Sync.init();
 try { if (!localStorage.getItem(STORE_KEY)) save(); } catch { /* хранилище недоступно — работаем в памяти */ }
+if (lastFinished()) ui.draft = fieldsOf(lastFinished());
 applyTheme();
 setupPager();
 

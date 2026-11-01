@@ -330,3 +330,6 @@ label.f > input, label.f > select, label.f > textarea { margin-top: 4px; color: 
 .toast { display: flex; align-items: center; gap: 14px; }
 .toast.has-act { pointer-events: auto; }
 .toast button { border: 0; background: none; color: var(--accent); font-weight: 700; padding: 0; }
+.recent { display: flex; flex-direction: column; gap: 2px; }
+.recent .chips { margin-top: 2px; }
+.recent .chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
